@@ -4,6 +4,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # suppress TF logs
 import firebase_admin
 from firebase_admin import credentials, firestore
 from fastapi import FastAPI
+import tensorflow as tf
 from tensorflow.keras.models import load_model
 import joblib
 import numpy as np
