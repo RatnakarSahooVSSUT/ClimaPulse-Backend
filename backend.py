@@ -85,7 +85,7 @@ def get_latest_data():
 app = FastAPI()
 
 # Load model & scaler
-model = tf.keras.models.load_model("model_tf_format")
+model = load_model("model_tf_format", compile=False)
 scaler = joblib.load("scaler.save")
 
 # -------------------------------
