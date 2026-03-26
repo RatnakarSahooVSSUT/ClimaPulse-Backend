@@ -84,7 +84,7 @@ def get_latest_data():
 app = FastAPI()
 
 # Load model & scaler
-model = load_model("aqi_model.h5", compile=False)
+model = load_model("aqi_model.keras", compile=False)
 scaler = joblib.load("scaler.save")
 
 # -------------------------------
