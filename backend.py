@@ -124,7 +124,7 @@ def predict(hours: int = 6):
         # FUTURE PREDICTION LOOP
         # -------------------------------
         for i in range(hours):
-            pred = model.predict(current.reshape(1, 12, 4), verbose=0)[0]
+            pred = model(current.reshape(1, 12, 4), training=False).numpy()[0]
 
             pm25, pm10, temp = pred
 
