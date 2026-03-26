@@ -8,6 +8,7 @@ import tensorflow as tf
 import joblib
 import numpy as np
 import json
+from fastapi.middleware.cors import CORSMiddleware
 
 # -------------------------------
 # AQI CALCULATION (CPCB)
@@ -80,6 +81,14 @@ def get_latest_data():
 # -------------------------------
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ✅ FIXED MODEL LOADING (SavedModel)
 model = tf.saved_model.load("model_tf_format")
@@ -158,7 +167,7 @@ def predict(hours: int = 6):
 
         final_pred = forecast[-1]
 
-        aqi_change = ((final_pred["aqi"] - curr_aqi) / curr_aqi) * 100
+        aqi_change = ((final_pred["aqi"] - curr_aqi) / curr_aqi) * 100 if curr_aqi != 0 else 0
         temp_change = final_pred["temperature"] - curr_temp
 
         aqi_values = [f["aqi"] for f in forecast]
