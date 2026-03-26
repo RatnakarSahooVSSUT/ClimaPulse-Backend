@@ -1,8 +1,9 @@
 fastapi
 uvicorn
-tensorflow
-numpy
-pandas
-joblib
 firebase-admin
+numpy
+joblib
+pandas
 scikit-learn
+tensorflow==2.13.0
+keras==2.13.1
