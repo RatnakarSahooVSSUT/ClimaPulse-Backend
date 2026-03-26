@@ -2,6 +2,7 @@ fastapi
 uvicorn
 tensorflow
 numpy
+pandas
 joblib
 firebase-admin
 scikit-learn
