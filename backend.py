@@ -5,9 +5,9 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from fastapi import FastAPI
 import tensorflow as tf
-from tensorflow.keras.models import load_model
 import joblib
 import numpy as np
+import json
 
 # -------------------------------
 # AQI CALCULATION (CPCB)
@@ -39,9 +39,6 @@ def calculate_aqi(pm25, pm10):
 # -------------------------------
 # FIREBASE INIT
 # -------------------------------
-
-import os
-import json
 
 firebase_config = json.loads(os.environ.get("FIREBASE_KEY"))
 
@@ -84,8 +81,10 @@ def get_latest_data():
 
 app = FastAPI()
 
-# Load model & scaler
-model = load_model("model_tf_format", compile=False)
+# ✅ FIXED MODEL LOADING (SavedModel)
+model = tf.saved_model.load("model_tf_format")
+infer = model.signatures["serving_default"]
+
 scaler = joblib.load("scaler.save")
 
 # -------------------------------
@@ -103,18 +102,11 @@ def home():
 @app.get("/predict")
 def predict(hours: int = 6):
     try:
-        # -------------------------------
-        # GET LATEST DATA
-        # -------------------------------
         input_data = get_latest_data()
 
-        # current real values
         curr_pm25, curr_pm10, curr_temp, curr_hum = input_data[-1]
         curr_aqi = calculate_aqi(curr_pm25, curr_pm10)
 
-        # -------------------------------
-        # SCALE INPUT
-        # -------------------------------
         input_scaled = scaler.transform(input_data)
 
         preds = []
@@ -124,7 +116,13 @@ def predict(hours: int = 6):
         # FUTURE PREDICTION LOOP
         # -------------------------------
         for i in range(hours):
-            pred = model(current.reshape(1, 12, 4), training=False).numpy()[0]
+
+            # ✅ FIXED PREDICTION (SavedModel inference)
+            input_tensor = tf.convert_to_tensor(
+                current.reshape(1, 12, 4), dtype=tf.float32
+            )
+            output = infer(input_tensor)
+            pred = list(output.values())[0].numpy()[0]
 
             pm25, pm10, temp = pred
 
@@ -132,7 +130,7 @@ def predict(hours: int = 6):
                 pm25,
                 pm10,
                 temp,
-                current[-1][3]  # keep humidity constant
+                current[-1][3]
             ]
 
             preds.append(pred)
@@ -158,31 +156,20 @@ def predict(hours: int = 6):
                 "temperature": round(temp, 1)
             })
 
-        # -------------------------------
-        # SUMMARY CALCULATIONS
-        # -------------------------------
         final_pred = forecast[-1]
 
-        # % change
         aqi_change = ((final_pred["aqi"] - curr_aqi) / curr_aqi) * 100
         temp_change = final_pred["temperature"] - curr_temp
 
-        # -------------------------------
-        # CONFIDENCE CALCULATION
-        # -------------------------------
         aqi_values = [f["aqi"] for f in forecast]
         temp_values = [f["temperature"] for f in forecast]
 
         aqi_std = np.std(aqi_values)
         temp_std = np.std(temp_values)
 
-        # convert to confidence
         aqi_conf = max(60, 100 - aqi_std)
         temp_conf = max(60, 100 - temp_std)
 
-        # -------------------------------
-        # FINAL RESPONSE
-        # -------------------------------
         return {
             "current": {
                 "aqi": round(curr_aqi, 1),
