@@ -1,6 +1,8 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # suppress TF logs
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+import time
+import threading
 import firebase_admin
 from firebase_admin import credentials, firestore
 from fastapi import FastAPI
@@ -11,7 +13,7 @@ import json
 from fastapi.middleware.cors import CORSMiddleware
 
 # -------------------------------
-# AQI CALCULATION (CPCB)
+# AQI CALCULATION
 # -------------------------------
 
 def aqi_pm25(c):
@@ -45,36 +47,52 @@ firebase_config = json.loads(os.environ.get("FIREBASE_KEY"))
 
 cred = credentials.Certificate(firebase_config)
 firebase_admin.initialize_app(cred)
-
 db = firestore.client()
 
 # -------------------------------
-# FETCH LATEST DATA
+# CACHE SYSTEM (KEY FIX 🚀)
 # -------------------------------
 
+CACHE_TTL = 60  # seconds
+
+cache_lock = threading.Lock()
+cached_data = None
+last_fetch_time = 0
+
 def get_latest_data():
-    docs = db.collection("sensor_data") \
-             .order_by("timestamp", direction=firestore.Query.DESCENDING) \
-             .limit(12).stream()
+    global cached_data, last_fetch_time
 
-    data = []
+    with cache_lock:
+        current_time = time.time()
 
-    for doc in docs:
-        d = doc.to_dict()
+        # ✅ Return cached data if within TTL
+        if cached_data is not None and (current_time - last_fetch_time < CACHE_TTL):
+            return cached_data
 
-        data.append([
-            d.get("pm25", 0),
-            d.get("pm10", 0),
-            d.get("temperature", 25),
-            d.get("humidity", 50)
-        ])
+        # 🔥 Fetch from Firebase only when needed
+        docs = db.collection("sensor_data") \
+                 .order_by("timestamp", direction=firestore.Query.DESCENDING) \
+                 .limit(12).stream()
 
-    data.reverse()  # oldest → newest
+        data = []
+        for doc in docs:
+            d = doc.to_dict()
+            data.append([
+                d.get("pm25", 0),
+                d.get("pm10", 0),
+                d.get("temperature", 25),
+                d.get("humidity", 50)
+            ])
 
-    if len(data) < 12:
-        raise ValueError("Not enough data in Firebase (need 12 readings)")
+        data.reverse()
 
-    return np.array(data)
+        if len(data) < 12:
+            raise ValueError("Not enough data in Firebase")
+
+        cached_data = np.array(data)
+        last_fetch_time = current_time
+
+        return cached_data
 
 # -------------------------------
 # FASTAPI INIT
@@ -90,23 +108,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ FIXED MODEL LOADING (SavedModel)
+# -------------------------------
+# MODEL LOAD (ONCE ONLY)
+# -------------------------------
+
 model = tf.saved_model.load("model_tf_format")
 infer = model.signatures["serving_default"]
-
 scaler = joblib.load("scaler.save")
 
 # -------------------------------
-# ROOT API
+# ROUTES
 # -------------------------------
 
 @app.get("/")
 def home():
     return {"message": "AQI Prediction API Running"}
-
-# -------------------------------
-# PREDICTION API
-# -------------------------------
 
 @app.get("/predict")
 def predict(hours: int = 6):
@@ -121,33 +137,21 @@ def predict(hours: int = 6):
         preds = []
         current = input_scaled.copy()
 
-        # -------------------------------
-        # FUTURE PREDICTION LOOP
-        # -------------------------------
         for i in range(hours):
-
-            # ✅ FIXED PREDICTION (SavedModel inference)
             input_tensor = tf.convert_to_tensor(
                 current.reshape(1, 12, 4), dtype=tf.float32
             )
+
             output = infer(input_tensor)
             pred = list(output.values())[0].numpy()[0]
 
             pm25, pm10, temp = pred
 
-            next_row = [
-                pm25,
-                pm10,
-                temp,
-                current[-1][3]
-            ]
+            next_row = [pm25, pm10, temp, current[-1][3]]
 
             preds.append(pred)
             current = np.vstack([current[1:], next_row])
 
-        # -------------------------------
-        # INVERSE + AQI
-        # -------------------------------
         forecast = []
 
         for i, p in enumerate(preds):
