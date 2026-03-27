@@ -50,26 +50,49 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 # -------------------------------
-# CACHE SYSTEM (KEY FIX 🚀)
+# SMART CACHE SYSTEM 🚀
 # -------------------------------
 
 CACHE_TTL = 60  # seconds
 
 cache_lock = threading.Lock()
+
 cached_data = None
 last_fetch_time = 0
+last_timestamp = None
 
 def get_latest_data():
-    global cached_data, last_fetch_time
+    global cached_data, last_fetch_time, last_timestamp
 
     with cache_lock:
         current_time = time.time()
 
-        # ✅ Return cached data if within TTL
+        # ✅ Step 1: If within 60 sec → use cache (0 reads)
         if cached_data is not None and (current_time - last_fetch_time < CACHE_TTL):
             return cached_data
 
-        # 🔥 Fetch from Firebase only when needed
+        # ✅ Step 2: Check latest document (ONLY 1 READ)
+        latest_doc = db.collection("sensor_data") \
+                       .order_by("timestamp", direction=firestore.Query.DESCENDING) \
+                       .limit(1).stream()
+
+        latest_list = list(latest_doc)
+
+        if not latest_list:
+            # ⚠️ No data ever → return old cache if exists
+            if cached_data is not None:
+                return cached_data
+            raise ValueError("No data available in Firebase")
+
+        latest_data = latest_list[0].to_dict()
+        current_timestamp = latest_data.get("timestamp")
+
+        # ✅ Step 3: If NO new data → reuse cache (0 extra reads)
+        if last_timestamp == current_timestamp and cached_data is not None:
+            last_fetch_time = current_time  # refresh TTL
+            return cached_data
+
+        # ✅ Step 4: New data → fetch full dataset (12 reads)
         docs = db.collection("sensor_data") \
                  .order_by("timestamp", direction=firestore.Query.DESCENDING) \
                  .limit(12).stream()
@@ -87,9 +110,14 @@ def get_latest_data():
         data.reverse()
 
         if len(data) < 12:
-            raise ValueError("Not enough data in Firebase")
+            # ⚠️ Not enough data → fallback to cache
+            if cached_data is not None:
+                return cached_data
+            raise ValueError("Not enough data")
 
+        # ✅ Update cache
         cached_data = np.array(data)
+        last_timestamp = current_timestamp
         last_fetch_time = current_time
 
         return cached_data
@@ -109,7 +137,7 @@ app.add_middleware(
 )
 
 # -------------------------------
-# MODEL LOAD (ONCE ONLY)
+# MODEL LOAD
 # -------------------------------
 
 model = tf.saved_model.load("model_tf_format")
